@@ -1,0 +1,155 @@
+// lib/main.dart
+//import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:just_audio/just_audio.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(MusicApp());
+}
+
+class MusicApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Music Streaming App',
+      theme: ThemeData.dark(),
+      home: HomeScreen(),
+    );
+  }
+}
+
+// lib/screens/home_screen.dart
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? currentSongUrl;
+  bool isPlaying = false;
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
+  Future<void> _playSong(String url) async {
+    if (currentSongUrl != url) {
+      await _audioPlayer.setUrl(url);
+      currentSongUrl = url;
+    }
+    
+    if (isPlaying) {
+      await _audioPlayer.pause();
+    } else {
+      await _audioPlayer.play();
+    }
+    
+    setState(() {
+      isPlaying = !isPlaying;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Music Library'),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('songs').snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          }
+
+          if (!snapshot.hasData) {
+            return Center(child: CircularProgressIndicator());
+          }
+
+          return ListView.builder(
+            itemCount: snapshot.data!.docs.length,
+            itemBuilder: (context, index) {
+              var song = snapshot.data!.docs[index];
+              return ListTile(
+                leading: Icon(Icons.music_note),
+                title: Text(song['title']),
+                subtitle: Text(song['artist']),
+                trailing: IconButton(
+                  icon: Icon(
+                    currentSongUrl == song['url'] && isPlaying
+                        ? Icons.pause
+                        : Icons.play_arrow,
+                  ),
+                  onPressed: () => _playSong(song['url']),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// lib/models/song.dart
+class Song {
+  final String id;
+  final String title;
+  final String artist;
+  final String url;
+  final String albumArt;
+
+  Song({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.url,
+    required this.albumArt,
+  });
+
+  factory Song.fromFirestore(DocumentSnapshot doc) {
+    Map data = doc.data() as Map;
+    return Song(
+      id: doc.id,
+      title: data['title'] ?? '',
+      artist: data['artist'] ?? '',
+      url: data['url'] ?? '',
+      albumArt: data['albumArt'] ?? '',
+    );
+  }
+}
+
+// lib/services/firebase_service.dart
+class FirebaseService {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+
+  Future<List<Song>> getSongs() async {
+    QuerySnapshot snapshot = await _firestore.collection('songs').get();
+    return snapshot.docs.map((doc) => Song.fromFirestore(doc)).toList();
+  }
+
+  Future<String> uploadSong(String filePath, String fileName) async {
+    Reference ref = _storage.ref().child('songs/$fileName');
+    UploadTask uploadTask = ref.putFile(File(filePath));
+    TaskSnapshot snapshot = await uploadTask;
+    return await snapshot.ref.getDownloadURL();
+  }
+
+  Future<void> addSong(Song song) async {
+    await _firestore.collection('songs').add({
+      'title': song.title,
+      'artist': song.artist,
+      'url': song.url,
+      'albumArt': song.albumArt,
+    });
+  }
+}
